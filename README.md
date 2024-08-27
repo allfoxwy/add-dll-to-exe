@@ -6,6 +6,7 @@ Primary intent of this tool is to pair PE executeable with a self-made DLL which
 The detour process could be achieved via library like [MinHook](https://github.com/TsudaKageyu/minhook) or [Detours](https://github.com/microsoft/Detours).
 
 It has no dependency. You could call it easily as `node add-dll-to-exe.js [PE name]`
+
 The DLL which would be loaded is "sideload-DLL.dll", you could edit this name in source.
 
 Currently offsets are hard-coded for x32 PE.
