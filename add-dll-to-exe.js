@@ -1,4 +1,5 @@
 const fs = require("fs");
+const readline = require("readline");
 
 
 let exe = Buffer.alloc(0);
@@ -87,10 +88,13 @@ function insertNewSection(name, data, characteristics = 0xe0000060) {
 }
 
 function refreshSectionInfo() {
+    RVAcalculationTable = [];
+
     for (let sectionHeaderAddr = peHeaderAddr + 0xf8; sectionHeaderAddr < peHeaderAddr + 0xf8 + sectionCount() * 0x28; sectionHeaderAddr += 0x28) {
         let item = {
             rawAddress: exe.readUInt32LE(sectionHeaderAddr + 0x14),
             virtualAddress: exe.readUInt32LE(sectionHeaderAddr + 0x0c),
+            sectionName: readCString(exe, sectionHeaderAddr),
         };
 
         RVAcalculationTable.push(item);
@@ -126,7 +130,7 @@ function rva2raw(rva) {
 function writeCString(buffer, offset, str) {
     let code = Buffer.from(str, "latin1");
     code.copy(buffer, offset);
-    
+
     let ending = Buffer.from([0]);
     ending.copy(buffer, offset + code.length);
 
@@ -188,14 +192,14 @@ function printImports() {
         let importFuncAddr = originalFirstThunk != 0 ? originalFirstThunk : firstThunk;
         importFuncAddr = rva2raw(importFuncAddr);
 
-        while(true) {
+        while (true) {
             let ILT = exe.readUInt32LE(importFuncAddr);
 
-            if(ILT === 0) {
+            if (ILT === 0) {
                 break;
             }
 
-            if(ILT & (1 << 31)) {
+            if (ILT & (1 << 31)) {
                 let hint = exe.readUInt16LE(importFuncAddr);
                 console.log("\t" + hint + "\tImport by ordinal");
             } else {
@@ -211,6 +215,17 @@ function printImports() {
     }
 }
 
+function isPatched() {
+    refreshSectionInfo();
+
+    for (let i of RVAcalculationTable) {
+        if (i.sectionName === ".sldll") {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 
 function isPE() {
@@ -239,56 +254,104 @@ function isPE() {
 
 
 
-
 (function main() {
-    if (process.argv.length < 3) {
-        console.log("Need a .EXE name");
-        return;
+    try {
+        let peName;
+
+        if (process.argv.length >= 3) {
+            peName = process.argv[2];
+        } else {
+            let dir = fs.readdirSync(process.cwd());
+            dir.forEach(function (file, index) {
+                if (file === "WoW_tweaked.exe") {
+                    peName = file;
+                }
+            });
+
+            if (peName === undefined) {
+                dir.forEach(function (file, index) {
+                    if (file === "WoWFoV.exe") {
+                        peName = file;
+                    }
+                });
+            }
+
+            if (peName === undefined) {
+                dir.forEach(function (file, index) {
+                    if (file === "WoW.exe") {
+                        peName = file;
+                    }
+                });
+            }
+        }
+
+        if (peName === undefined) {
+            throw new Error("Need a PE(.exe) name. You could put this file at the same folder with WoW.exe");
+        }
+
+        exe = fs.readFileSync(peName);
+        if (!isPE()) {
+            throw new Error(peName + " is not a PE(.exe) file.");
+        }
+
+        if (isPatched()) {
+            throw new Error(peName + " is already patched. Skipping patching.");
+        }
+
+        // Buffer contents:
+        // - Copied import directory
+        // - item for new DLL
+        // - ending of directory
+        // - new ILT
+        // - ILT ending
+        // - Original RVA of import directory
+        // - new string for import directory
+        let sideloadDLLsection = Buffer.alloc(getImportDirectoryLength() + 256);
+
+        let importDirectoryAddr = rva2raw(exe.readUInt32LE(peHeaderAddr + 0x80));
+        let b = exe.copy(sideloadDLLsection, 0, importDirectoryAddr, importDirectoryAddr + getImportDirectoryLength());
+
+        // Save original RVA of import directory
+        // reserve 1 new item and 1 for ending and 2 for new ILT
+        exe.copy(sideloadDLLsection, getImportDirectoryLength() + 0x14 + 0x14 + 4 * 2, peHeaderAddr + 0x80, peHeaderAddr + 0x80 + 4);
+
+        // new ILT
+        sideloadDLLsection.writeUInt32LE((((1 << 31) >>> 0) + 1), getImportDirectoryLength() + 0x14 + 0x14);
+
+        // new string for import directory
+        writeCString(sideloadDLLsection, getImportDirectoryLength() + 0x14 + 0x14 + 4 * 2 + 4, "sideload-DLL.dll");
+
+        let newSection = insertNewSection(".sldll", sideloadDLLsection);
+
+        // new import directory item
+        let ILTrva = raw2rva(newSection.newRawAddress + getImportDirectoryLength() + 0x14 + 0x14)
+        let newStrRVA = raw2rva(newSection.newRawAddress + getImportDirectoryLength() + 0x14 + 0x14 + 4 * 2 + 4);
+        exe.writeUInt32LE(ILTrva, newSection.newRawAddress + getImportDirectoryLength());
+        exe.writeUInt32LE(newStrRVA, newSection.newRawAddress + getImportDirectoryLength() + 0x0c);
+        exe.writeUInt32LE(ILTrva, newSection.newRawAddress + getImportDirectoryLength() + 0x10);
+
+        // Point import directory RVA to newly added one
+        exe.writeUInt32LE(raw2rva(newSection.newRawAddress), peHeaderAddr + 0x80);
+
+        fs.writeFileSync("WoW_sideload-DLL.exe", exe);
+
+        console.info(peName + " is successfully patched with sideload DLL capability. New file name is WoW_sideload-DLL.exe");
+    } catch (err) {
+        console.error(err.toString());
     }
 
-    exe = fs.readFileSync(process.argv[2]);
-    if (!isPE()) {
-        console.log("That's not a .EXE");
-        return;
+    const keypress = async () => {
+        process.stdin.setRawMode(true)
+        return new Promise(resolve => process.stdin.once('data', () => {
+            process.stdin.setRawMode(false)
+            resolve()
+        }))
     }
 
-    // Buffer contents:
-    // - Copied import directory
-    // - item for new DLL
-    // - ending of directory
-    // - new ILT
-    // - ILT ending
-    // - Original RVA of import directory
-    // - new string for import directory
-    let sideloadDLLsection = Buffer.alloc(getImportDirectoryLength() + 256);
-
-    let importDirectoryAddr = rva2raw(exe.readUInt32LE(peHeaderAddr + 0x80));
-    let b = exe.copy(sideloadDLLsection, 0, importDirectoryAddr, importDirectoryAddr + getImportDirectoryLength());
-
-    // Save original RVA of import directory
-    // reserve 1 new item and 1 for ending and 2 for new ILT
-    exe.copy(sideloadDLLsection, getImportDirectoryLength() + 0x14 + 0x14 + 4 * 2, peHeaderAddr + 0x80, peHeaderAddr + 0x80 + 4);
-    
-    // new ILT
-    sideloadDLLsection.writeUInt32LE((((1 << 31) >>> 0) + 1), getImportDirectoryLength() + 0x14 + 0x14);
-
-    // new string for import directory
-    writeCString(sideloadDLLsection, getImportDirectoryLength() + 0x14 + 0x14 + 4 * 2 + 4, "sideload-DLL.dll");
-    
-    let newSection = insertNewSection(".sldll", sideloadDLLsection);
-
-    // new import directory item
-    let ILTrva = raw2rva(newSection.newRawAddress + getImportDirectoryLength() + 0x14 + 0x14)
-    let newStrRVA = raw2rva(newSection.newRawAddress + getImportDirectoryLength() + 0x14 + 0x14 + 4 * 2 + 4);
-    exe.writeUInt32LE(ILTrva, newSection.newRawAddress + getImportDirectoryLength());
-    exe.writeUInt32LE(newStrRVA, newSection.newRawAddress + getImportDirectoryLength() + 0x0c);
-    exe.writeUInt32LE(ILTrva, newSection.newRawAddress + getImportDirectoryLength() + 0x10);
-
-    // Point import directory RVA to newly added one
-    exe.writeUInt32LE(raw2rva(newSection.newRawAddress), peHeaderAddr + 0x80);
-
-    fs.writeFileSync("my-test.exe", exe);
-    
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question("Press ENTER to exit.", (k) => {
+        rl.close();
+    });
 
 })();
 
