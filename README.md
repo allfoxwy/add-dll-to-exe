@@ -1,5 +1,5 @@
 # add-dll-to-exe
-This is a Node.js program which would edit PE import directory so that when run PE additional DLL would be loaded.
+This is a Node.js program which would edit PE import directory so that when run PE, additional DLL would be loaded.
 
 Primary intent of this tool is to pair PE executeable with a self-made DLL which would detour Win32 API. When PE call such API, arbitrary code could be executed.
 
