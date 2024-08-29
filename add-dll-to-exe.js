@@ -28,6 +28,13 @@ function imageSize(change) {
     return exe.readUInt32LE(peHeaderAddr + 0x50);
 }
 
+function importDirectorySize(change) {
+    if (change) {
+        exe.writeUInt32LE(change, peHeaderAddr + 0x84);
+    }
+    return exe.readUInt32LE(peHeaderAddr + 0x84);
+}
+
 function newSectionHeader(name, size, characteristics = 0xe0000060) {
     if (typeof (name) === "string") {
         name = Buffer.from(name, "latin1");
@@ -63,6 +70,8 @@ function newSectionHeader(name, size, characteristics = 0xe0000060) {
 function insertNewSection(name, data, characteristics = 0xe0000060) {
     let newHeader = newSectionHeader(name, data.length, characteristics);
 
+    let virtualAddr = newHeader.readUInt32LE(0x0c);
+    let virtualSize = newHeader.readUInt32LE(0x08);
     let rawAddr = newHeader.readUInt32LE(0x14);
 
     let headersBefore = exe.subarray(0, peHeaderAddr + 0xf8 + (0x28 * sectionCount()));
@@ -77,7 +86,7 @@ function insertNewSection(name, data, characteristics = 0xe0000060) {
 
     sectionCount(sectionCount() + 1);
 
-    imageSize(imageSize() + Math.ceil(data.length / sectionAlignment()) * sectionAlignment());
+    imageSize(Math.ceil((virtualAddr + virtualSize) / sectionAlignment()) * sectionAlignment());
 
     refreshSectionInfo();
 
@@ -344,6 +353,9 @@ process.emit = function (name, data, ...args) {
         exe.writeUInt32LE(ILTrva, newSection.newRawAddress + getImportDirectoryLength());
         exe.writeUInt32LE(newStrRVA, newSection.newRawAddress + getImportDirectoryLength() + 0x0c);
         exe.writeUInt32LE(ILTrva, newSection.newRawAddress + getImportDirectoryLength() + 0x10);
+
+        // Adjust import directory size
+        importDirectorySize(importDirectorySize() + 0x14);
 
         // Point import directory RVA to newly added one
         exe.writeUInt32LE(raw2rva(newSection.newRawAddress), peHeaderAddr + 0x80);
