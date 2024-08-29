@@ -33,8 +33,8 @@ function newSectionHeader(name, size, characteristics = 0xe0000060) {
         name = Buffer.from(name, "latin1");
     }
 
-    if (name.length > 8) {
-        throw new Error("Section name could have 8 bytes at most.");
+    if (name.length > 7) {
+        throw new Error("Section name could have 7 bytes at most.");
     }
 
     let result = Buffer.alloc(0x28);
@@ -107,7 +107,7 @@ function raw2rva(raw) {
     });
 
     for (let i = 0; i < RVAcalculationTable.length; ++i) {
-        if (raw > RVAcalculationTable[i].rawAddress) {
+        if (raw >= RVAcalculationTable[i].rawAddress) {
             return raw - RVAcalculationTable[i].rawAddress + RVAcalculationTable[i].virtualAddress;
         }
     }
@@ -120,7 +120,7 @@ function rva2raw(rva) {
     });
 
     for (let i = 0; i < RVAcalculationTable.length; ++i) {
-        if (rva > RVAcalculationTable[i].virtualAddress) {
+        if (rva >= RVAcalculationTable[i].virtualAddress) {
             return rva - RVAcalculationTable[i].virtualAddress + RVAcalculationTable[i].rawAddress;
         }
     }
